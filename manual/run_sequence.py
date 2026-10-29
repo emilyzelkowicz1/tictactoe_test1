@@ -25,7 +25,7 @@ def parse_args():
     parser.add_argument("-y", "--yes", action="store_true", help="skip safety prompt")
     return parser.parse_args()
 
-
+     
 def sequence_event_name(notification):
     """Return the sequence event enum name without depending on its field name."""
     for field, value in notification.ListFields():
