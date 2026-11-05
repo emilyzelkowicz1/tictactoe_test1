@@ -1,6 +1,7 @@
-"""Operator-directed tic-tac-toe using saved Kinova movements."""
+"""Minimax tic-tac-toe using saved Kinova movements."""
 
 import argparse
+from functools import lru_cache
 from collections import Counter
 import math
 import sys
@@ -89,8 +90,49 @@ def ask_yes_no(prompt, read=input, write=print):
         write("Please enter yes or no.")
 
 
+LINES = ((0, 1, 2), (3, 4, 5), (6, 7, 8), (0, 3, 6), (1, 4, 7),
+         (2, 5, 8), (0, 4, 8), (2, 4, 6))
+MOVE_ORDER = (4, 0, 2, 6, 8, 1, 3, 5, 7)
+
+
+def outcome(board):
+    for a, b, c in LINES:
+        if board[a] and board[a] == board[b] == board[c]:
+            return board[a]
+    return "draw" if all(board) else None
+
+
+@lru_cache(maxsize=None)
+def minimax(board, turn):
+    result = outcome(board)
+    if result is not None:
+        remaining = board.count("")
+        return (1 + remaining) if result == "X" else (-1 - remaining) if result == "O" else 0
+    scores = []
+    for i in MOVE_ORDER:
+        if not board[i]:
+            child = board[:i] + (turn,) + board[i + 1:]
+            scores.append(minimax(child, "O" if turn == "X" else "X"))
+    return max(scores) if turn == "X" else min(scores)
+
+
+def choose_x(board):
+    """Return an empty cell for X, preferring faster wins and a central opening."""
+    board = tuple(board)
+    if outcome(board) is not None:
+        raise ValueError("The round has already ended")
+    i = max((i for i in MOVE_ORDER if not board[i]),
+            key=lambda i: minimax(board[:i] + ("X",) + board[i + 1:], "O"))
+    return CELLS[i]
+
+
+def show_board(board, write):
+    for row in range(3):
+        write(" | ".join(board[i] or CELLS[i] for i in range(row * 3, row * 3 + 3)))
+
+
 def play(arm, read=input, write=print):
-    """The operator selects every X and declares the result; there is no AI."""
+    """X moves first; the operator reports each O after drawing it."""
     validated = False
     while ask_yes_no("Do you want to play a round of tic tac toe? (yes/no): ", read, write):
         if not validated:
@@ -101,24 +143,39 @@ def play(arm, read=input, write=print):
             continue
         arm.run("getMarker")
         arm.run("drawBoard")
-        used = set()
-        write("Boxes: 11 12 13 / 21 22 23 / 31 32 33. Enter 'done' to end the round.")
-        while True:
-            cell = read("Where do you want me to draw X? ").strip().lower()
-            if cell == "done":
-                break
-            if cell not in CELLS:
-                write("Enter a row and column from 1 to 3, such as 11 or 23.")
-                continue
-            if cell in used:
-                write("I already drew X there. Choose an empty box.")
-                continue
+        board = [""] * 9
+        write("I play X first. You play O. Boxes: 11 12 13 / 21 22 23 / 31 32 33.")
+        while outcome(board) is None:
+            cell = choose_x(board)
+            write(f"I choose {cell}.")
             arm.run(f"drawx{cell}")
-            used.add(cell)
-            write("Once the arm has stopped, draw your move. Check whether anyone won or it is a draw.")
-            if ask_yes_no("Is the round over? (yes/no): ", read, write):
+            board[CELLS.index(cell)] = "X"
+            show_board(board, write)
+            if outcome(board) is not None:
                 break
-            write("Choose a box that does not contain your mark.")
+            write("Once the arm has stopped, draw O in an empty box, then move clear.")
+            while True:
+                cell = read("Where did you draw O? Enter row/column, or 'done' to end: ").strip().lower()
+                if cell == "done":
+                    break
+                if cell not in CELLS:
+                    write("Enter a row and column from 1 to 3, such as 11 or 23.")
+                    continue
+                if board[CELLS.index(cell)]:
+                    write("That box is occupied. Enter the empty box where you drew O.")
+                    continue
+                board[CELLS.index(cell)] = "O"
+                show_board(board, write)
+                break
+            if cell == "done":
+                write("Round ended by the user.")
+                break
+            if outcome(board) is None:
+                while not ask_yes_no("Are you clear of the workspace for my next X? (yes/no): ", read, write):
+                    write("Waiting for the workspace to be clear.")
+        result = outcome(board)
+        if result:
+            write("The round is a draw." if result == "draw" else f"{result} wins!")
         # Do not move back into the board area until the human is clear.
         while not ask_yes_no("Ready to put the marker away and erase? Clear the workspace (yes/no): ", read, write):
             write("Waiting for the workspace to be clear.")

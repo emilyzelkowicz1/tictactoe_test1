@@ -32,21 +32,53 @@ class GameTests(unittest.TestCase):
         self.assertEqual(self.play(['maybe', 'no']), [])
 
     def test_two_rounds_and_invalid_moves(self):
-        answers = ['yes', 'yes', '44', '11', 'no', '11', '12', 'yes', 'no', 'yes',
-                   'yes', 'yes', '33', 'yes', 'yes', 'no']
-        cleanup = ['markerDown', 'eraserUp', 'eraseBoard', 'eraserDown']
-        self.assertEqual(self.play(answers), ['validate', 'getMarker', 'drawBoard', 'drawx11', 'drawx12'] + cleanup +
-                         ['getMarker', 'drawBoard', 'drawx33'] + cleanup)
+        answers = ['yes', 'yes', '44', '22', '11', 'yes', '11', 'done', 'yes',
+                   'yes', 'yes', 'done', 'yes', 'no']
+        calls = self.play(answers)
+        self.assertEqual(calls.count('drawx22'), 2)
+        self.assertEqual(calls.count('eraserDown'), 2)
+        self.assertNotIn('drawx11', calls)
+        self.assertEqual(calls.count('validate'), 1)
+
+    def test_wins_and_blocks(self):
+        self.assertEqual(game.choose_x(['X', 'X', '', 'O', 'O', '', '', '', '']), '13')
+        self.assertEqual(game.choose_x(['O', 'O', '', '', 'X', '', '', '', 'X']), '13')
+
+    def test_all_human_responses_never_lose_or_overlap(self):
+        terminals = []
+        def visit(board):
+            result = game.outcome(board)
+            if result:
+                terminals.append(result)
+                self.assertNotEqual(result, 'O')
+                return
+            cell = game.choose_x(board)
+            i = game.CELLS.index(cell)
+            self.assertEqual(board[i], '')
+            next_board = list(board)
+            next_board[i] = 'X'
+            if game.outcome(next_board):
+                visit(next_board)
+                return
+            for j in range(9):
+                if not next_board[j]:
+                    child = next_board.copy()
+                    child[j] = 'O'
+                    visit(child)
+        visit([''] * 9)
+        self.assertGreater(len(terminals), 0)
+        self.assertIn('draw', terminals)
+        self.assertIn('X', terminals)
 
     def test_done_cleans_up(self):
         self.assertEqual(self.play(['yes', 'yes', 'done', 'yes', 'no'])[-4:],
                          ['markerDown', 'eraserUp', 'eraseBoard', 'eraserDown'])
 
     def test_failure_stops_further_motion(self):
-        arm = Arm('drawx11')
+        arm = Arm('drawx22')
         with self.assertRaises(RuntimeError):
             self.play(['yes', 'yes', '11'], arm)
-        self.assertEqual(arm.calls[-1], 'drawx11')
+        self.assertEqual(arm.calls[-1], 'drawx22')
         self.assertNotIn('eraserUp', arm.calls)
 
     def test_declining_clearance_does_not_move(self):
