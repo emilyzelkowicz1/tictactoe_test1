@@ -46,9 +46,7 @@ def run_sequence(base, sequence, timeout):
 
         # Kortex versions use slightly different enum prefixes.  Matching the
         # meaningful suffix keeps this compatible with those versions.
-        
-        if (("COMPLETED" in event_name or "ABORTED" in event_name) and "TASK" not in event_name
-        ):
+        if "COMPLETED" in event_name or "ABORTED" in event_name:
             result["event"] = event_name
             finished.set()
 
