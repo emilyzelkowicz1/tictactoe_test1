@@ -60,3 +60,47 @@ python3 -m unittest discover -s tests -v
 ```
 
 Hardware execution requires SDK installation and network access to the arm. Simulation and tests do not validate taught trajectories or physical robot behavior.
+
+## USB camera on a tripod
+
+A tripod is a mount; a USB camera connected to the computer is required. This supports cameras OpenCV can open, including typical Microsoft USB webcams. It has not been tested with your specific camera or physical arm.
+
+Install camera dependencies on the computer running the game (a virtual environment is recommended):
+
+```sh
+python3 -m pip install -r manual/requirements-camera.txt
+```
+
+Keep the camera and board fixed with all nine squares visible, even lighting, dark ink on a light board, and no glare. The arm must withdraw completely from the board view after each X. Keep marks inside the squares, away from grid lines. Detection assumes one new O per human turn.
+
+### Calibrate once
+
+Draw a grid manually before calibration. Run this on your desktop with a display:
+
+```sh
+python3 manual/board_camera.py --calibrate
+```
+
+Click the four **outer corners of the entire nine-square playing area**, in this order: top-left, top-right, bottom-right, bottom-left. These define the rectangle enclosing the whole board, not the four intersections of the interior grid lines. Row 1 is the top row and column 1 is the left column in this selected orientation; it must match the taught robot coordinates. Press Enter to save `board-camera.json`, R to reset clicks, or Escape to cancel. For another USB camera, add `--camera-index 1`. Recalibrate if the camera, board, resolution, or framing changes. Each newly drawn robot grid must occupy the same calibrated position.
+
+### Test camera detection without moving the arm
+
+Start with an empty grid:
+
+```sh
+python3 manual/board_camera.py
+```
+
+Press Enter to capture a reference **before** drawing O. Draw O, move clear, then press Enter again. Check the detected coordinate and answer yes or no. Repeat with other empty boxes or enter `done`. This command never connects to the robot.
+
+### Play with camera input
+
+Once detection is reliable and the robot movements have been tested:
+
+```sh
+python3 manual/tic_tac_toe.py --camera --ip 192.168.1.10
+```
+
+Add `--kind action` for saved Actions. Use the same `--camera-index` as calibration if you changed it. The arm chooses and draws X. Before you draw O, the program asks for a reference image. Then draw O, clear the view, and press Enter to photograph your move. Confirm the detected box, then confirm the workspace is clear before the arm moves. Win/draw detection and cleanup work as before. Omitting `--camera` retains typed O coordinates.
+
+The camera detects **new dark ink**, not the shape of an O. Multiple changes, changes in occupied squares, large shadows, and large lighting changes are rejected when detected. These checks cannot guarantee recognition of every obstruction or camera movement: inspect every proposed coordinate before accepting it. Rejected pictures do not change the recorded board or trigger robot movement; retry with a clear view or enter `done` to end the round. Never confirm an incorrect coordinate. No automatic motion is triggered merely by a camera image.

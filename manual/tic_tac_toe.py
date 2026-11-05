@@ -131,7 +131,7 @@ def show_board(board, write):
         write(" | ".join(board[i] or CELLS[i] for i in range(row * 3, row * 3 + 3)))
 
 
-def play(arm, read=input, write=print):
+def play(arm, read=input, write=print, camera=None):
     """X moves first; the operator reports each O after drawing it."""
     validated = False
     while ask_yes_no("Do you want to play a round of tic tac toe? (yes/no): ", read, write):
@@ -153,9 +153,11 @@ def play(arm, read=input, write=print):
             show_board(board, write)
             if outcome(board) is not None:
                 break
+            reference = camera.baseline(read, write) if camera else None
             write("Once the arm has stopped, draw O in an empty box, then move clear.")
             while True:
-                cell = read("Where did you draw O? Enter row/column, or 'done' to end: ").strip().lower()
+                cell = (camera.human_move(reference, board, read, write) if camera else
+                        read("Where did you draw O? Enter row/column, or 'done' to end: ").strip().lower())
                 if cell == "done":
                     break
                 if cell not in CELLS:
@@ -189,6 +191,9 @@ def main():
     parser.add_argument("--simulate", action="store_true", help="print movements without connecting to a robot")
     parser.add_argument("--kind", choices=("sequence", "action"), default="sequence",
                         help="type of saved robot movement (default: sequence)")
+    parser.add_argument("--camera", action="store_true", help="detect human moves with a calibrated USB camera")
+    parser.add_argument("--camera-index", type=int, default=0)
+    parser.add_argument("--calibration", default="board-camera.json")
     parser.add_argument("--ip", default="192.168.1.10")
     parser.add_argument("-u", "--username", default="admin")
     parser.add_argument("-p", "--password", default="admin")
@@ -196,8 +201,12 @@ def main():
     args = parser.parse_args()
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be a finite positive number")
+    camera = None
     try:
-        play(SimulatedArm() if args.simulate else KinovaArm(args))
+        if args.camera:
+            from board_camera import BoardCamera
+            camera = BoardCamera(args.camera_index, args.calibration)
+        play(SimulatedArm() if args.simulate else KinovaArm(args), camera=camera)
         return 0
     except (KeyboardInterrupt, EOFError):
         print("\nStopped. No automatic cleanup will run; check the arm before restarting.", file=sys.stderr)
@@ -205,6 +214,10 @@ def main():
     except Exception as error:
         print(f"Stopped: {error}. Check the arm before restarting; no further movements will run.", file=sys.stderr)
         return 1
+
+    finally:
+        if camera is not None:
+            camera.close()
 
 
 if __name__ == "__main__":

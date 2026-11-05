@@ -28,6 +28,22 @@ class GameTests(unittest.TestCase):
         game.play(arm, lambda _: next(answers), lambda _: None)
         return arm.calls
 
+    def test_camera_move_reaches_algorithm(self):
+        class Camera:
+            def baseline(self, read, write):
+                return 'reference'
+
+            def human_move(self, reference, board, read, write):
+                self.last_board = board.copy()
+                return '11' if board[0] == '' else 'done'
+        camera = Camera()
+        arm = Arm()
+        answers = iter(['yes', 'yes', 'yes', 'yes', 'no'])
+        game.play(arm, lambda _: next(answers), lambda _: None, camera=camera)
+        self.assertEqual(camera.last_board[0], 'O')
+        self.assertNotIn('drawx11', arm.calls)
+        self.assertEqual(arm.calls[-4:], ['markerDown', 'eraserUp', 'eraseBoard', 'eraserDown'])
+
     def test_no_does_not_connect(self):
         self.assertEqual(self.play(['maybe', 'no']), [])
 
