@@ -69,6 +69,46 @@ class VisionTests(unittest.TestCase):
         answers = iter(['', 'no', '', 'yes'])
         self.assertEqual(obj.human_move(reference, [''] * 9, lambda _: next(answers), lambda _: None), '11')
 
+    def test_mild_focus_change_with_new_o(self):
+        before = self.blank()
+        self.mark(before, 4)
+        after = before.copy()
+        self.mark(after, 0)
+        after = cv2.GaussianBlur(after, (9, 9), 1.8)
+        board = ['', '', '', '', 'X', '', '', '', '']
+        self.assertEqual(camera.detect_move(before, after, board), '11')
+
+    def test_stable_burst_combines_noise(self):
+        image = self.blank()
+        rng = np.random.default_rng(42)
+        frames = [np.clip(image.astype(int) + rng.integers(-2, 3, image.shape), 0, 255).astype('uint8')
+                  for _ in range(7)]
+        combined = camera.combine_stable_frames(frames)
+        self.assertEqual(combined.shape, image.shape)
+        self.assertLess(np.abs(combined.astype(int) - image).mean(), 1)
+
+    def test_unsettled_or_blurry_burst_rejected(self):
+        image = self.blank()
+        blurred = cv2.GaussianBlur(image, (31, 31), 8)
+        for frames in ([image] * 6 + [blurred], [blurred] * 7,
+                       [image] * 6 + [np.full_like(image, 180)]):
+            with self.assertRaises(camera.UncertainMove):
+                camera.combine_stable_frames(frames)
+
+    def test_failed_baseline_retries_before_drawing(self):
+        obj = camera.BoardCamera.__new__(camera.BoardCamera)
+        attempts = iter([camera.UncertainMove('Still focusing'), self.blank()])
+        def capture():
+            value = next(attempts)
+            if isinstance(value, Exception):
+                raise value
+            return value
+        obj.capture = capture
+        messages = []
+        reference = obj.baseline(lambda _: '', messages.append)
+        self.assertEqual(reference.shape, (600, 600, 3))
+        self.assertTrue(any('Do not draw O yet' in m for m in messages))
+
     def test_invalid_calibration(self):
         with self.assertRaises(ValueError):
             camera.validate_calibration({'corners': [[0, 0]] * 4, 'resolution': [640, 480]})

@@ -5,6 +5,8 @@ required before accepting a move. Keep camera, board, lighting and arm pose fixe
 """
 import argparse
 import json
+import time
+from collections import deque
 from pathlib import Path
 
 import cv2
@@ -32,9 +34,14 @@ def detect_move(before, after, board):
     if abs(exposure) > 20:
         raise UncertainMove('Lighting changed too much. Restore the lighting and retry.')
     delta -= exposure
-    changed = np.abs(delta) > 35
-    added = (delta > 35) & (b < 160)
-    removed = delta < -35
+    # Focus changes alter stroke edges without changing which box is occupied.
+    # Only count ink beyond a small neighborhood of the previous stroke.
+    old_ink = (a < 160).astype(np.uint8)
+    new_ink = (b.astype(np.float32) + exposure < 160).astype(np.uint8)
+    kernel = np.ones((7, 7), np.uint8)
+    added = (new_ink > 0) & (cv2.dilate(old_ink, kernel) == 0) & (delta > 35)
+    removed = (old_ink > 0) & (cv2.dilate(new_ink, kernel) == 0) & (delta < -35)
+    changed = added | removed
     candidates = []
     for i, cell in enumerate(CELLS):
         row, col = divmod(i, 3)
@@ -55,6 +62,23 @@ def detect_move(before, after, board):
     if len(candidates) != 1:
         raise UncertainMove(f'Expected one changed empty box; detected {len(candidates)}.')
     return candidates[0]
+
+
+def combine_stable_frames(frames):
+    """Combine a settled burst; reject blur, motion and changing exposure."""
+    if len(frames) < 7 or any(f.shape != frames[0].shape for f in frames):
+        raise UncertainMove('Need seven matching camera frames.')
+    grays = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in frames]
+    focus = [cv2.Laplacian(g, cv2.CV_64F).var() for g in grays]
+    if min(focus) < 15:
+        raise UncertainMove('Image is too blurry. Check focus and distance from the board.')
+    if max(focus) / min(focus) > 1.35:
+        raise UncertainMove('Camera is still focusing. Keep the view clear and retry.')
+    for gray in grays[1:]:
+        diff = np.abs(gray.astype(np.int16) - grays[0].astype(np.int16))
+        if np.mean(diff) > 3 or np.mean(diff > 20) > .015:
+            raise UncertainMove('Camera image is not stable yet. Keep hands clear and retry.')
+    return np.median(np.stack(frames), axis=0).astype(np.uint8)
 
 
 def validate_calibration(data):
@@ -95,18 +119,41 @@ class BoardCamera:
         return frame
 
     def capture(self):
-        frame = self.frame()
-        height, width = frame.shape[:2]
-        if [width, height] != self.data['resolution']:
-            raise RuntimeError('Camera resolution changed. Recalibrate before playing.')
-        matrix = cv2.getPerspectiveTransform(self.points, np.float32([[0, 0], [599, 0], [599, 599], [0, 599]]))
-        return cv2.warpPerspective(frame, matrix, (SIZE, SIZE))
+        # Keep consuming frames during warmup so stale USB buffers are drained.
+        start = time.monotonic()
+        burst = deque(maxlen=7)
+        reason = 'Camera did not settle.'
+        while time.monotonic() - start < 6:
+            ok, frame = self.cap.read()
+            if not ok:
+                raise RuntimeError('Camera capture failed. No robot move will be selected.')
+            height, width = frame.shape[:2]
+            if [width, height] != self.data['resolution']:
+                raise RuntimeError('Camera resolution changed. Recalibrate before playing.')
+            if time.monotonic() - start < 1:
+                continue
+            matrix = cv2.getPerspectiveTransform(self.points, np.float32([[0, 0], [599, 0], [599, 599], [0, 599]]))
+            burst.append(cv2.warpPerspective(frame, matrix, (SIZE, SIZE)))
+            if len(burst) == 7:
+                try:
+                    return combine_stable_frames(list(burst))
+                except UncertainMove as error:
+                    reason = str(error)
+        raise UncertainMove(reason)
 
     def baseline(self, read=input, write=print):
-        read('Before drawing O, clear the board view and press Enter to capture the reference: ')
-        reference = self.capture()
-        write('Reference captured. Draw one O now, then move your hand clear.')
-        return reference
+        while True:
+            answer = read('Before drawing O, clear the view and press Enter for the reference (or quit): ')
+            if answer.strip().lower() == 'quit':
+                raise KeyboardInterrupt
+            write('Capturing several frames; keep the board clear while the camera settles...')
+            try:
+                reference = self.capture()
+            except UncertainMove as error:
+                write(f'Reference not accepted: {error} Do not draw O yet; retry or enter quit.')
+                continue
+            write('Reference captured. Draw one O now, then move your hand clear.')
+            return reference
 
     def human_move(self, reference, board, read=input, write=print):
         while True:
